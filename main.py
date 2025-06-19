@@ -1,11 +1,18 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from jose import JWTError
+import jwt
 from pymongo import MongoClient
+from requests import Session
 from models import FetchMenuBody, UpdateMenuBody
 from bson import ObjectId
 from bson.json_util import dumps
 from json import loads
+from datetime import datetime, timedelta, timezone
+
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 30
 
 app = FastAPI()
 
@@ -23,6 +30,42 @@ db = mongo_client.get_database("Res_Data")
 
 profile_collection = db.get_collection("Res_profiles")
 menu_collection = db.get_collection("Res_menus")
+
+def createAccessToken(data):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, "somethingsupercool", algorithm=ALGORITHM)
+
+@app.middleware("http")
+async def validateToken(request: Request, call_next):
+    skip_auth_paths = ['/login','/register', "/docs", "/openapi.json", "/redoc"]
+
+    for path in skip_auth_paths:
+        if request.url.path.startswith(path): return await call_next(request)
+
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+
+    if token:
+        try:
+            payload = jwt.decode(token=token)
+            user_id = payload.get('user_id')
+
+            restaurant = list(profile_collection.find({"_id":ObjectId(user_id)}))
+
+            if len(restaurant) == 0:
+                raise HTTPException(status_code=401, detail="Invalid Token")
+
+            request.state.restaurant = restaurant[0]
+        except JWTError:
+            raise HTTPException(status_code=401, detail="Invalid or Expired Token")
+    else:
+        raise HTTPException(status_code=401, detail="Token Missing")
+    
+    response = await call_next(request)
+    return response
 
 @app.post("/fetchMenu")
 def fetchMenu(body: FetchMenuBody):

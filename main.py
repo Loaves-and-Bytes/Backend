@@ -5,16 +5,19 @@ from jose import JWTError
 import jwt
 from pymongo import MongoClient
 from requests import Session
-from models import FetchMenuBody, UpdateMenuBody
+from models import FetchMenuBody, UpdateMenuBody, LoginBody, RegisterBody
 from bson import ObjectId
 from bson.json_util import dumps
 from json import loads
 from datetime import datetime, timedelta, timezone
+from passlib.context import CryptContext
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
 
 app = FastAPI()
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,7 +42,7 @@ def createAccessToken(data):
 
 @app.middleware("http")
 async def validateToken(request: Request, call_next):
-    skip_auth_paths = ['/login','/register', "/docs", "/openapi.json", "/redoc"]
+    skip_auth_paths = ['/login','/register', "/docs", "/openapi.json", "/redoc", "/fetchMenu", "/search"]
 
     for path in skip_auth_paths:
         if request.url.path.startswith(path): return await call_next(request)
@@ -51,11 +54,11 @@ async def validateToken(request: Request, call_next):
     if token:
         try:
             payload = jwt.decode(token=token)
-            user_id = payload.get('user_id')
+            res_id = payload.get('restaurant_menu_id')
 
-            restaurant = list(profile_collection.find({"_id":ObjectId(user_id)}))
+            restaurant = profile_collection.find_one({"_id":ObjectId(res_id)})
 
-            if len(restaurant) == 0:
+            if restaurant is None:
                 raise HTTPException(status_code=401, detail="Invalid Token")
 
             request.state.restaurant = restaurant[0]
@@ -66,6 +69,43 @@ async def validateToken(request: Request, call_next):
     
     response = await call_next(request)
     return response
+
+@app.post("/login")
+def login(body: LoginBody):
+    user_res = profile_collection.find_one({"username":body.username})
+    print(user_res is None)
+    print(pwd_context.verify("123456",user_res["pswd"]))
+
+    if user_res is None or not pwd_context.verify("123456", user_res["pswd"]):
+        raise HTTPException(status_code=401, detail='Invalid Credentials')
+    
+    access_token = createAccessToken(data={'restaurant_menu_id':str(user_res["res_id"])})
+
+    response = JSONResponse(status_code=200, content={"token": access_token, "message": "Login Successful"})
+    return response
+
+@app.post("/register")
+def register(body: RegisterBody):
+    check_prof = list(profile_collection.find({"res_name":body.name_of_restaurant}))
+    if len(check_prof) !=0:
+        return JSONResponse(status_code=400, content={"msg":"A Profile against this restaurant already exists"})
+    
+    check_username_dup = list(profile_collection.find({"username":body.username}))
+    if len(check_username_dup) != 0:
+        return JSONResponse(status_code=400, content={"msg":"Username already in use"})
+
+    hashed_pswd = pwd_context.hash(body.pswd)
+
+    try:
+        res_menu_id = str(menu_collection.find_one({"name": body.name_of_restaurant})["_id"])
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"msg":"Incorrect restaurant name provided"})
+
+    profile_collection.insert_one({"res_name":body.name_of_restaurant,"username":body.username,"pswd":hashed_pswd,"res_id":res_menu_id})
+
+    access_token = createAccessToken(data={'restaurant_menu_id':res_menu_id})
+
+    return JSONResponse(status_code=200, content={"token": access_token, "message": "Register Successful"})
 
 @app.post("/fetchMenu")
 def fetchMenu(body: FetchMenuBody):

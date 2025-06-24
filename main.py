@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,6 +12,7 @@ from bson.json_util import dumps
 from json import loads
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
+from dotenv import load_dotenv
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
@@ -34,11 +36,13 @@ db = mongo_client.get_database("Res_Data")
 profile_collection = db.get_collection("Res_profiles")
 menu_collection = db.get_collection("Res_menus")
 
+load_dotenv()
+
 def createAccessToken(data):
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, "somethingsupercool", algorithm=ALGORITHM)
+    return jwt.encode(to_encode, os.getenv("SECRET_KEY"), algorithm=ALGORITHM)
 
 @app.middleware("http")
 async def validateToken(request: Request, call_next):
@@ -53,15 +57,15 @@ async def validateToken(request: Request, call_next):
 
     if token:
         try:
-            payload = jwt.decode(token=token)
-            res_id = payload.get('restaurant_menu_id')
+            payload = jwt.decode(jwt=token,algorithms=[ALGORITHM],key=os.getenv("SECRET_KEY"))
+            res_id = payload.get('restaurant_id')
 
             restaurant = profile_collection.find_one({"_id":ObjectId(res_id)})
 
             if restaurant is None:
                 raise HTTPException(status_code=401, detail="Invalid Token")
 
-            request.state.restaurant = restaurant[0]
+            request.state.restaurant = restaurant["res_id"]
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid or Expired Token")
     else:
@@ -73,13 +77,11 @@ async def validateToken(request: Request, call_next):
 @app.post("/login")
 def login(body: LoginBody):
     user_res = profile_collection.find_one({"username":body.username})
-    print(user_res is None)
-    print(pwd_context.verify("123456",user_res["pswd"]))
 
-    if user_res is None or not pwd_context.verify("123456", user_res["pswd"]):
+    if user_res is None or not pwd_context.verify(body.pswd, user_res["pswd"]):
         raise HTTPException(status_code=401, detail='Invalid Credentials')
     
-    access_token = createAccessToken(data={'restaurant_menu_id':str(user_res["res_id"])})
+    access_token = createAccessToken(data={'restaurant_id':str(user_res["_id"])})
 
     response = JSONResponse(status_code=200, content={"token": access_token, "message": "Login Successful"})
     return response
@@ -117,12 +119,26 @@ def fetchMenu(body: FetchMenuBody):
     return JSONResponse(status_code=200, content=loads(dumps(data)))
 
 @app.post("/updateMenu")
-def UpdateMenu(body: UpdateMenuBody):
+def UpdateMenu(body: UpdateMenuBody,request: Request):
+    res_id = request.state.restaurant
     try:
         if body.action == "u":
-            menu_collection.find_one_and_update({"_id":ObjectId(body.res_id)},{"$set":body.update_str})
+            menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str})
         elif body.action == "a" :
-            menu_collection.find_one_and_update({"_id":ObjectId(body.res_id),},{"$push":body.update_str})
+            menu_collection.find_one_and_update({"_id":ObjectId(res_id),},{"$push":body.update_str})
+        elif body.action == "d" :
+            doc = menu_collection.find_one({"_id":ObjectId(res_id)})
+            if len(body.update_str["loc"]) == 1:
+                doc["menu"]["sections"].pop(body.update_str["loc"][0])
+                l = doc["menu"]["sections"]
+                menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":{"menu.sections":l}})
+            elif len(body.update_str["loc"]) > 1:
+                doc["menu"]["sections"][body.update_str["loc"][0]]["dishes"].pop(body.update_str["loc"][1])
+                l = doc["menu"]["sections"][body.update_str["loc"][0]]["dishes"]
+                menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":{f"menu.sections.{body.update_str['loc'][0]}.dishes":l}}) 
+            else:
+                return JSONResponse(status_code=400, content={"msg":"Incorrent action flag passed"})   
+            # pass
         else: 
             return JSONResponse(status_code=400, content={"msg":"Incorrent action flag passed"})
 

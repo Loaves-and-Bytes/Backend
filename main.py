@@ -138,7 +138,6 @@ def UpdateMenu(body: UpdateMenuBody,request: Request):
                 menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":{f"menu.sections.{body.update_str['loc'][0]}.dishes":l}}) 
             else:
                 return JSONResponse(status_code=400, content={"msg":"Incorrent action flag passed"})   
-            # pass
         else: 
             return JSONResponse(status_code=400, content={"msg":"Incorrent action flag passed"})
 

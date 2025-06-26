@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 from dotenv import load_dotenv
 
+load_dotenv()
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
 
@@ -29,14 +31,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-mongo_client = MongoClient("mongodb+srv://abeladityaphilipose:A3m1mjTDEPAYwMHb@datastore.dayo1hn.mongodb.net/?retryWrites=true&w=majority&appName=DataStore")
+mongo_client = MongoClient(os.getenv("MONGO_CONNECTION_STRING"))
 
 db = mongo_client.get_database("Res_Data")
 
 profile_collection = db.get_collection("Res_profiles")
 menu_collection = db.get_collection("Res_menus")
-
-load_dotenv()
 
 def createAccessToken(data):
     to_encode = data.copy()
@@ -48,10 +48,14 @@ def createAccessToken(data):
 async def validateToken(request: Request, call_next):
     skip_auth_paths = ['/login','/register', "/docs", "/openapi.json", "/redoc", "/fetchMenu", "/search"]
 
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     for path in skip_auth_paths:
         if request.url.path.startswith(path): return await call_next(request)
 
-    auth_header = request.headers.get("Authorization")
+    auth_header = request.headers.get("authorization")
+    token = ''
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ")[1]
 
@@ -59,17 +63,19 @@ async def validateToken(request: Request, call_next):
         try:
             payload = jwt.decode(jwt=token,algorithms=[ALGORITHM],key=os.getenv("SECRET_KEY"))
             res_id = payload.get('restaurant_id')
+            res_menu_id = payload.get("restaurant_menu_id")
 
             restaurant = profile_collection.find_one({"_id":ObjectId(res_id)})
 
             if restaurant is None:
                 raise HTTPException(status_code=401, detail="Invalid Token")
 
-            request.state.restaurant = restaurant["res_id"]
+            request.state.restaurant = res_id
+            request.state.restaurant_menu = res_menu_id
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid or Expired Token")
     else:
-        raise HTTPException(status_code=401, detail="Token Missing")
+        return JSONResponse(status_code=401, content={"message":"token missing"})
     
     response = await call_next(request)
     return response
@@ -81,7 +87,7 @@ def login(body: LoginBody):
     if user_res is None or not pwd_context.verify(body.pswd, user_res["pswd"]):
         raise HTTPException(status_code=401, detail='Invalid Credentials')
     
-    access_token = createAccessToken(data={'restaurant_id':str(user_res["_id"])})
+    access_token = createAccessToken(data={'restaurant_id':str(user_res["_id"]),'restaurant_menu_id':user_res['res_id']})
 
     response = JSONResponse(status_code=200, content={"token": access_token, "message": "Login Successful"})
     return response
@@ -120,7 +126,7 @@ def fetchMenu(body: FetchMenuBody):
 
 @app.post("/updateMenu")
 def UpdateMenu(body: UpdateMenuBody,request: Request):
-    res_id = request.state.restaurant
+    res_id = request.state.restaurant_menu
     try:
         if body.action == "u":
             menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str})
@@ -146,6 +152,39 @@ def UpdateMenu(body: UpdateMenuBody,request: Request):
     
     return JSONResponse(status_code=200, content="menu update successful")
 
+@app.get("/fetchDishes")
+def fetchDishes(request: Request):
+    res_id = request.state.restaurant_menu
+
+    dish_list = []
+
+    try:
+        menu = menu_collection.find_one({"_id": ObjectId(res_id)})
+
+        for i in menu["menu"]["sections"]:
+            dish_list.extend(i["dishes"])
+
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"message":"trouble fetching dishes"})
+
+    return JSONResponse(status_code=200, content={"list": dish_list})
+
+@app.get("/fetchSections")
+def fetchDishes(request: Request):
+    res_id = request.state.restaurant_menu
+
+    section_list = []
+
+    try:
+        menu = menu_collection.find_one({"_id": ObjectId(res_id)})
+
+        for i in menu["menu"]["sections"]:
+            section_list.append(i["name"])
+
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"message":"trouble fetching dishes"})
+
+    return JSONResponse(status_code=200, content={"list": section_list})
 
 # ADD AI PART HERE -------------
 @app.post("/search")

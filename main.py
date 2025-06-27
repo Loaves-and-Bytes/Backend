@@ -162,10 +162,11 @@ def fetchDishes(request: Request):
         menu = menu_collection.find_one({"_id": ObjectId(res_id)})
 
         for i in range(len(menu["menu"]["sections"])):
-            for j in menu["menu"]["sections"][i]["dishes"]:
-                j["sectionCoord"] = i
+            for j in range(len(menu["menu"]["sections"][i]["dishes"])):
+                menu["menu"]["sections"][i]["dishes"][j]["sectionCoord"] = i
+                menu["menu"]["sections"][i]["dishes"][j]["dishCoord"] = j
 
-                dish_list.append(j)
+                dish_list.append(menu["menu"]["sections"][i]["dishes"][j])
 
     except Exception as e:
         return JSONResponse(status_code=400, content={"message":"trouble fetching dishes"})
@@ -181,8 +182,12 @@ def fetchDishes(request: Request):
     try:
         menu = menu_collection.find_one({"_id": ObjectId(res_id)})
 
-        for i in menu["menu"]["sections"]:
-            section_list.append(i["name"])
+        for i in range(len(menu["menu"]["sections"])):
+            data = {
+                "name": menu["menu"]["sections"][i]["name"],
+                "sectionCoord": i
+            }
+            section_list.append(data)
 
     except Exception as e:
         return JSONResponse(status_code=400, content={"message":"trouble fetching dishes"})

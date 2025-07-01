@@ -1,9 +1,11 @@
 import os
+import faiss
+import jwt
+import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from jose import JWTError
-import jwt
 from pymongo import MongoClient
 from requests import Session
 from models import FetchMenuBody, UpdateMenuBody, LoginBody, RegisterBody
@@ -13,6 +15,7 @@ from json import loads
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
@@ -196,6 +199,75 @@ def fetchDishes(request: Request):
 
 # ADD AI PART HERE -------------
 @app.post("/search")
-def search():
-    pass
+def search(body: FetchMenuBody, query_text: str, threshold: float = -1, k: int = 10):
+    dish_records = []
+    menu_doc = menu_collection.find_one({"_id": ObjectId(body.res_id)})
+
+    for section in menu_doc["menu"]["sections"]:
+        for dish in section["dishes"]:
+            if "embedding" in dish:
+                dish_records.append({
+                    "name": dish["name"],
+                    "description": dish.get("desc", ""),
+                    "section": section["name"],
+                    "price": dish["price"],
+                    "tags": dish.get("tags", []),
+                    "embedding": np.array(dish["embedding"], dtype="float32")
+                })
+
+    dim = len(dish_records[0]["embedding"])
+    index = faiss.IndexFlatL2(dim)
+    embeddings = np.array([d["embedding"] for d in dish_records]) 
+    index.add(embeddings)
+
+    model = SentenceTransformer("all-mpnet-base-v2") 
+    query_vector = model.encode(query_text).astype("float32").reshape(1, -1)
+    distances, indices = index.search(query_vector, k)
+    similarities = 1 - distances[0] 
+
+    results = []
+    for i, sim in zip(indices[0], similarities):
+        if sim >= threshold:
+            doc = dish_records[i]
+            print(sim, ' - ', doc['name'], doc['section'], doc['price'], doc['tags'], doc['description'])
+            doc.pop('embedding', None)
+            results.append(doc)
+
+    return JSONResponse(status_code=200, content={"results": results})
+
+@app.post("/generate_embeddings_for_menu")
+def generate_embeddings_for_menu(body: FetchMenuBody):
+    embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
+    
+    try:
+        item = menu_collection.find_one({"_id":ObjectId(body.res_id)})
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"message": "Error fetching menu", "error": str(e)})
+    
+    updated_sections = []
+    try:
+        for section in item['menu']['sections']:
+            updated_dishes = []
+            for dish in section['dishes']:
+
+                if 'embedding' in dish:
+                    updated_dishes.append(dish)
+                    continue
+
+                text = f"{dish['name']}. {dish['desc']}. Category: {dish['section']}."
+                embedding = embed_model.encode(text)
+                dish['embedding'] = embedding.tolist()
+                updated_dishes.append(dish)
+
+            section['dishes'] = updated_dishes
+            updated_sections.append(section)
+
+        menu_collection.update_one(
+            {'_id': ObjectId(body.res_id)},
+            {'$set': {'menu.sections': updated_sections}}
+        )
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"message": "Error generating embeddings", "error": str(e)})
+
+    return JSONResponse(status_code=200, content={"message": "Embeddings generated and updated successfully"})
 # ---------------

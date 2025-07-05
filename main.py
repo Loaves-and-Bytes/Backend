@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from jose import JWTError
 from pymongo import MongoClient
 from requests import Session
-from models import FetchMenuBody, UpdateMenuBody, LoginBody, RegisterBody
+from models import FetchMenuBody, UpdateMenuBody, LoginBody, RegisterBody, SearchBody
 from bson import ObjectId
 from bson.json_util import dumps
 from json import loads
@@ -35,9 +35,9 @@ app.add_middleware(
 )
 
 mongo_client = MongoClient(os.getenv("MONGO_CONNECTION_STRING"))
+embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
 
 db = mongo_client.get_database("Res_Data")
-
 profile_collection = db.get_collection("Res_profiles")
 menu_collection = db.get_collection("Res_menus")
 
@@ -46,6 +46,42 @@ def createAccessToken(data):
     expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, os.getenv("SECRET_KEY"), algorithm=ALGORITHM)
+
+def semantic_search(menu_id: str, query_text: str, threshold: float = -1, k: int = 10):
+    dish_records = []
+    menu_doc = menu_collection.find_one({"_id": ObjectId(menu_id)})
+
+    for section in menu_doc["menu"]["sections"]:
+        for dish in section["dishes"]:
+            if "embedding" in dish:
+                dish_records.append({
+                    "name": dish["name"],
+                    "description": dish.get("desc", ""),
+                    "section": section["name"],
+                    "price": dish["price"],
+                    "tags": dish.get("tags", []),
+                    "embedding": np.array(dish["embedding"], dtype="float32")
+                })
+
+    dim = len(dish_records[0]["embedding"])
+    index = faiss.IndexFlatL2(dim)
+    embeddings = np.array([d["embedding"] for d in dish_records]) 
+    index.add(embeddings)
+
+    model = SentenceTransformer("all-mpnet-base-v2") 
+    query_vector = model.encode(query_text).astype("float32").reshape(1, -1)
+    distances, indices = index.search(query_vector, k)
+    similarities = 1 - distances[0] 
+
+    results = []
+    for i, sim in zip(indices[0], similarities):
+        if sim >= threshold:
+            doc = dish_records[i]
+            print(sim, ' - ', doc['name'], doc['section'], doc['price'], doc['tags'], doc['description'])
+            doc.pop('embedding', None)
+            results.append(doc)
+
+    return results
 
 @app.middleware("http")
 async def validateToken(request: Request, call_next):
@@ -129,13 +165,24 @@ def fetchMenu(body: FetchMenuBody):
 
 @app.post("/updateMenu")
 def UpdateMenu(body: UpdateMenuBody,request: Request):
+    embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
     res_id = request.state.restaurant_menu
     try:
-        if body.action == "u":
+        if body.action == "u": #update
+            # for i in body.update_str:
+            #     text = f"{i['name']}. {i['desc']}. Category: {i['section']}."
+            #     embedding = embed_model.encode(text)
+            #     i["embedding"] = embedding.tolist()
             menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str})
-        elif body.action == "a" :
+
+        elif body.action == "a" : #add
+            # for i in body.update_str:
+            #     text = f"{i['name']}. {i['desc']}. Category: {i['section']}."
+            #     embedding = embed_model.encode(text)
+            #     i["embedding"] = embedding.tolist()
             menu_collection.find_one_and_update({"_id":ObjectId(res_id),},{"$push":body.update_str})
-        elif body.action == "d" :
+            
+        elif body.action == "d" : #delete
             doc = menu_collection.find_one({"_id":ObjectId(res_id)})
             if len(body.update_str["loc"]) == 1:
                 doc["menu"]["sections"].pop(body.update_str["loc"][0])
@@ -199,41 +246,36 @@ def fetchDishes(request: Request):
 
 # ADD AI PART HERE -------------
 @app.post("/search")
-def search(body: FetchMenuBody, query_text: str, threshold: float = -1, k: int = 10):
-    dish_records = []
-    menu_doc = menu_collection.find_one({"_id": ObjectId(body.res_id)})
+def search_menu(search_request: SearchBody):
 
-    for section in menu_doc["menu"]["sections"]:
-        for dish in section["dishes"]:
-            if "embedding" in dish:
-                dish_records.append({
+    if search_request.user_query:
+        results = semantic_search( query_text=search_request.user_query, menu_id=search_request.menu_id, k=15, threshold=-1)
+    else:
+        results = []
+        menu_doc = menu_collection.find_one({"_id": ObjectId(search_request.menu_id)})
+        for section in menu_doc["menu"]["sections"]:
+            for dish in section["dishes"]:
+                results.append({
                     "name": dish["name"],
                     "description": dish.get("desc", ""),
                     "section": section["name"],
                     "price": dish["price"],
-                    "tags": dish.get("tags", []),
-                    "embedding": np.array(dish["embedding"], dtype="float32")
+                    "tags": dish.get("tags", [])
                 })
 
-    dim = len(dish_records[0]["embedding"])
-    index = faiss.IndexFlatL2(dim)
-    embeddings = np.array([d["embedding"] for d in dish_records]) 
-    index.add(embeddings)
+    if search_request.section_filter:
+        results = [doc for doc in results for section in search_request.section_filter if doc["section"].lower() == section.lower()]
 
-    model = SentenceTransformer("all-mpnet-base-v2") 
-    query_vector = model.encode(query_text).astype("float32").reshape(1, -1)
-    distances, indices = index.search(query_vector, k)
-    similarities = 1 - distances[0] 
+    if search_request.tags_filter:
+        results = [doc for doc in results for tag in search_request.tags_filter if tag.lower() in [doc_tag.lower() for doc_tag in doc["tags"]]]
 
-    results = []
-    for i, sim in zip(indices[0], similarities):
-        if sim >= threshold:
-            doc = dish_records[i]
-            print(sim, ' - ', doc['name'], doc['section'], doc['price'], doc['tags'], doc['description'])
-            doc.pop('embedding', None)
-            results.append(doc)
+    if search_request.price_min is not None:
+        results = [doc for doc in results if doc["price"] >= search_request.price_min]
 
-    return JSONResponse(status_code=200, content={"results": results})
+    if search_request.price_max is not None:
+        results = [doc for doc in results if doc["price"] <= search_request.price_max]
+
+    return JSONResponse(status_code=200, content={"search_results": results})
 
 @app.post("/generate_embeddings_for_menu")
 def generate_embeddings_for_menu(body: FetchMenuBody):

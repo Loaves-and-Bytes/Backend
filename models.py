@@ -16,3 +16,11 @@ class RegisterBody(BaseModel):
     username: str
     pswd: str
     name_of_restaurant: str
+
+class SearchBody(BaseModel):
+    user_query: str
+    menu_id: str
+    section_filter: list[str]
+    tags_filter: list[str]
+    price_min: float
+    price_max: float

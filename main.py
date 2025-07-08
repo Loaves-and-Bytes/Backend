@@ -165,21 +165,12 @@ def fetchMenu(body: FetchMenuBody):
 
 @app.post("/updateMenu")
 def UpdateMenu(body: UpdateMenuBody,request: Request):
-    embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
     res_id = request.state.restaurant_menu
     try:
         if body.action == "u": #update
-            # for i in body.update_str:
-            #     text = f"{i['name']}. {i['desc']}. Category: {i['section']}."
-            #     embedding = embed_model.encode(text)
-            #     i["embedding"] = embedding.tolist()
-            menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str})
-
+            menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str}) #update_str contains the whole json object of the menu that is updated in flutter
+            
         elif body.action == "a" : #add
-            # for i in body.update_str:
-            #     text = f"{i['name']}. {i['desc']}. Category: {i['section']}."
-            #     embedding = embed_model.encode(text)
-            #     i["embedding"] = embedding.tolist()
             menu_collection.find_one_and_update({"_id":ObjectId(res_id),},{"$push":body.update_str})
             
         elif body.action == "d" : #delete

@@ -2,6 +2,7 @@ import os
 import faiss
 import jwt
 import numpy as np
+import json
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -84,7 +85,6 @@ def semantic_search(menu_id: str, query_text: str, threshold: float = -1, k: int
     return results
 
 def generate_embeddings_for_menu(res_id: str):
-    embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
     
     try:
         item = menu_collection.find_one({"_id":ObjectId(res_id)})
@@ -199,13 +199,29 @@ def fetchMenu(body: FetchMenuBody):
     return JSONResponse(status_code=200, content=loads(dumps(data)))
 
 @app.post("/updateMenu")
-def UpdateMenu(body: UpdateMenuBody,request: Request):
+def UpdateMenu(body: UpdateMenuBody, request: Request):
     res_id = request.state.restaurant_menu
     try:
         if body.action == "u": #update
+            if not body.update_str.keys()[0].split(".")[-1] == "name":
+                dish = body.update_str.values()[0]
+                text = f"{dish['name']}. {dish['desc']}."
+                embedding = embed_model.encode(text)
+                dish['embedding'] = embedding.tolist()
+                body.update_str = {list(body.update_str.keys())[0]: dish}
+
             menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str}) #update_str contains the whole json object of the menu that is updated in flutter
             
         elif body.action == "a" : #add
+            if "menu.sections" not in list(body.update_str.keys()):
+                to_be_updated = body.update_str
+                dish = list(to_be_updated.values())[0][-1]
+                text = f"{dish['name']}. {dish['desc']}."
+                embedding = embed_model.encode(text)
+                dish['embedding'] = embedding.tolist()
+                to_be_updated[list(to_be_updated.keys())[0]][-1]=dish
+                body.update_str = to_be_updated
+                
             menu_collection.find_one_and_update({"_id":ObjectId(res_id),},{"$push":body.update_str})
             
         elif body.action == "d" : #delete

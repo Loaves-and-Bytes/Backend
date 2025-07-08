@@ -20,7 +20,7 @@ class RegisterBody(BaseModel):
 class SearchBody(BaseModel):
     user_query: str
     menu_id: str
-    section_filter: list[str]
-    tags_filter: list[str]
+    section_filter: list
+    tags_filter: list
     price_min: float
     price_max: float

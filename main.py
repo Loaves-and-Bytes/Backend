@@ -83,6 +83,41 @@ def semantic_search(menu_id: str, query_text: str, threshold: float = -1, k: int
 
     return results
 
+def generate_embeddings_for_menu(res_id: str):
+    embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
+    
+    try:
+        item = menu_collection.find_one({"_id":ObjectId(res_id)})
+    except Exception as e:
+        return {"message": "Error fetching menu", "error": str(e)}
+
+    updated_sections = []
+    try:
+        for section in item['menu']['sections']:
+            updated_dishes = []
+            for dish in section['dishes']:
+
+                if 'embedding' in dish:
+                    updated_dishes.append(dish)
+                    continue
+
+                text = f"{dish['name']}. {dish['desc']}. Category: {dish['section']}."
+                embedding = embed_model.encode(text)
+                dish['embedding'] = embedding.tolist()
+                updated_dishes.append(dish)
+
+            section['dishes'] = updated_dishes
+            updated_sections.append(section)
+
+        menu_collection.update_one(
+            {'_id': ObjectId(res_id)},
+            {'$set': {'menu.sections': updated_sections}}
+        )
+    except Exception as e:
+        return {"message": "Error generating embeddings", "error": str(e)}
+
+    return {"message": "Embeddings generated and updated successfully"}
+
 @app.middleware("http")
 async def validateToken(request: Request, call_next):
     skip_auth_paths = ['/login','/register', "/docs", "/openapi.json", "/redoc", "/fetchMenu", "/search"]
@@ -191,6 +226,11 @@ def UpdateMenu(body: UpdateMenuBody,request: Request):
     except Exception as e:
         return JSONResponse(status_code=400, content={"msg": "Error carrying out update request"})
     
+    result = generate_embeddings_for_menu(res_id)
+
+    if result.message != "Embeddings generated and updated successfully":
+        return JSONResponse(status_code=400, content=result)
+    
     return JSONResponse(status_code=200, content="menu update successful")
 
 @app.get("/fetchDishes")
@@ -268,39 +308,4 @@ def search_menu(search_request: SearchBody):
 
     return JSONResponse(status_code=200, content={"search_results": results})
 
-@app.post("/generate_embeddings_for_menu")
-def generate_embeddings_for_menu(body: FetchMenuBody):
-    embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
-    
-    try:
-        item = menu_collection.find_one({"_id":ObjectId(body.res_id)})
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"message": "Error fetching menu", "error": str(e)})
-    
-    updated_sections = []
-    try:
-        for section in item['menu']['sections']:
-            updated_dishes = []
-            for dish in section['dishes']:
-
-                if 'embedding' in dish:
-                    updated_dishes.append(dish)
-                    continue
-
-                text = f"{dish['name']}. {dish['desc']}. Category: {dish['section']}."
-                embedding = embed_model.encode(text)
-                dish['embedding'] = embedding.tolist()
-                updated_dishes.append(dish)
-
-            section['dishes'] = updated_dishes
-            updated_sections.append(section)
-
-        menu_collection.update_one(
-            {'_id': ObjectId(body.res_id)},
-            {'$set': {'menu.sections': updated_sections}}
-        )
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"message": "Error generating embeddings", "error": str(e)})
-
-    return JSONResponse(status_code=200, content={"message": "Embeddings generated and updated successfully"})
 # ---------------

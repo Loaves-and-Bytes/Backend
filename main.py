@@ -203,8 +203,8 @@ def UpdateMenu(body: UpdateMenuBody, request: Request):
     res_id = request.state.restaurant_menu
     try:
         if body.action == "u": #update
-            if not body.update_str.keys()[0].split(".")[-1] == "name":
-                dish = body.update_str.values()[0]
+            if not list(body.update_str.keys())[0].split(".")[-1] == "name":
+                dish = list(body.update_str.values())[0]
                 text = f"{dish['name']}. {dish['desc']}."
                 embedding = embed_model.encode(text)
                 dish['embedding'] = embedding.tolist()
@@ -244,10 +244,10 @@ def UpdateMenu(body: UpdateMenuBody, request: Request):
     
     result = generate_embeddings_for_menu(res_id)
 
-    if result.message != "Embeddings generated and updated successfully":
+    if result["message"] != "Embeddings generated and updated successfully":
         return JSONResponse(status_code=400, content=result)
     
-    return JSONResponse(status_code=200, content="menu update successful")
+    return JSONResponse(status_code=200, content={"message":"menu update successful"})
 
 @app.get("/fetchDishes")
 def fetchDishes(request: Request):

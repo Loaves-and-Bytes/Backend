@@ -2,7 +2,6 @@ import os
 import faiss
 import jwt
 import numpy as np
-import json
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -210,17 +209,15 @@ def UpdateMenu(body: UpdateMenuBody, request: Request):
                 dish['embedding'] = embedding.tolist()
                 body.update_str = {list(body.update_str.keys())[0]: dish}
 
-            menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str}) #update_str contains the whole json object of the menu that is updated in flutter
+            menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str}) #update_str contains the json object of the dish that is updated
             
         elif body.action == "a" : #add
             if "menu.sections" not in list(body.update_str.keys()):
-                to_be_updated = body.update_str
-                dish = list(to_be_updated.values())[0][-1]
+                dish = list(body.update_str.values())[0]
                 text = f"{dish['name']}. {dish['desc']}."
                 embedding = embed_model.encode(text)
                 dish['embedding'] = embedding.tolist()
-                to_be_updated[list(to_be_updated.keys())[0]][-1]=dish
-                body.update_str = to_be_updated
+                body.update_str = {list(body.update_str.keys())[0]: dish}
                 
             menu_collection.find_one_and_update({"_id":ObjectId(res_id),},{"$push":body.update_str})
             
@@ -241,11 +238,6 @@ def UpdateMenu(body: UpdateMenuBody, request: Request):
 
     except Exception as e:
         return JSONResponse(status_code=400, content={"msg": "Error carrying out update request"})
-    
-    result = generate_embeddings_for_menu(res_id)
-
-    if result["message"] != "Embeddings generated and updated successfully":
-        return JSONResponse(status_code=400, content=result)
     
     return JSONResponse(status_code=200, content={"message":"menu update successful"})
 

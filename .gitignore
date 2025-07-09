@@ -2,3 +2,4 @@ smart_csv_search.ipynb
 __pycache__
 check.py
 .env
+/models

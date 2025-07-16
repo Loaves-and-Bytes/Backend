@@ -1,6 +1,7 @@
 import os
 import faiss
 import jwt
+import requests
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,7 @@ load_dotenv()
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 app = FastAPI()
 
@@ -36,7 +38,7 @@ app.add_middleware(
 )
 
 mongo_client = MongoClient(os.getenv("MONGO_CONNECTION_STRING"))
-embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
+# embed_model = SentenceTransformer('all-mpnet-base-v2', cache_folder='./models/all-mpnet-base-v2')
 
 db = mongo_client.get_database("Res_Data")
 profile_collection = db.get_collection("Res_profiles")
@@ -66,8 +68,7 @@ def semantic_search(menu_id: str, query_text: str, threshold: float = -1, k: int
 
     index = faiss.read_index(f"faiss_index_{menu_doc['name']}.index")
 
-    model = SentenceTransformer("all-mpnet-base-v2") 
-    query_vector = model.encode(query_text).astype("float32").reshape(1, -1)
+    query_vector = np.array(get_embedding_from_mistral([query_text])[0]).astype("float32").reshape(1, -1)
     similarities, indices = index.search(normalize(query_vector, axis=1), k)
     results = []
     for i, sim in zip(indices[0], similarities[0]):
@@ -77,6 +78,22 @@ def semantic_search(menu_id: str, query_text: str, threshold: float = -1, k: int
             results.append(doc)
 
     return results
+
+def get_embedding_from_mistral(inputs):
+    response = requests.post("https://api.mistral.ai/v1/embeddings", 
+                             headers={
+                                "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                                "Content-Type": "application/json"
+                             }, 
+                             json={
+                                "model": "mistral-embed", 
+                                "input":inputs 
+                             })
+    if response.status_code == 200:
+        embeddings = [item["embedding"] for item in response.json()["data"]]
+        return embeddings
+    else:
+         raise Exception(f"Error fetching embeddings: {response.status_code} - {response.text}")
 
 def generate_embeddings_for_menu(res_id: str):
     
@@ -96,7 +113,7 @@ def generate_embeddings_for_menu(res_id: str):
                     continue
 
                 text = f"{dish['name']}. {dish['desc']}. Category: {dish['section']}."
-                embedding = embed_model.encode(text)
+                embedding = get_embedding_from_mistral([text])[0]
                 dish['embedding'] = embedding.tolist()
                 updated_dishes.append(dish)
 
@@ -200,8 +217,7 @@ def UpdateMenu(body: UpdateMenuBody, request: Request):
             if not list(body.update_str.keys())[0].split(".")[-1] == "name":
                 dish = list(body.update_str.values())[0]
                 text = f"{dish['name']}. {dish['desc']}."
-                embedding = embed_model.encode(text)
-                dish['embedding'] = embedding.tolist()
+                dish['embedding'] = get_embedding_from_mistral([text])[0]
                 body.update_str = {list(body.update_str.keys())[0]: dish}
 
             menu_collection.find_one_and_update({"_id":ObjectId(res_id)},{"$set":body.update_str}) #update_str contains the json object of the dish that is updated
@@ -210,8 +226,7 @@ def UpdateMenu(body: UpdateMenuBody, request: Request):
             if "menu.sections" not in list(body.update_str.keys()):
                 dish = list(body.update_str.values())[0]
                 text = f"{dish['name']}. {dish['desc']}."
-                embedding = embed_model.encode(text)
-                dish['embedding'] = embedding.tolist()
+                dish['embedding'] = get_embedding_from_mistral([text])[0]
                 body.update_str = {list(body.update_str.keys())[0]: dish}
                 
             menu_collection.find_one_and_update({"_id":ObjectId(res_id),},{"$push":body.update_str})
@@ -324,4 +339,8 @@ def search_menu(search_request: SearchBody):
 
     return JSONResponse(status_code=200, content={"search_results": results})
 
+@app.post("/generateEmbeddings")
+def generate_embeddings(request: Request):
+    res_id = request.state.restaurant_menu
+    return generate_embeddings_for_menu(res_id)
 # ---------------

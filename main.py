@@ -310,8 +310,12 @@ def fetchDishes(request: Request):
 @app.post("/search")
 def search_menu(search_request: SearchBody):
 
+    if search_request.user_query == "" and search_request.section_filter == [] and search_request.tags_filter == [] and search_request.price_min is None and search_request.price_max is None:
+        return JSONResponse(status_code=422, content={"message": "incorrect set of parameters passed"})
+
     if search_request.user_query:
         results = semantic_search( query_text=search_request.user_query, menu_id=search_request.menu_id, k=15, threshold=-1)
+
     else:
         results = []
         menu_doc = menu_collection.find_one({"_id": ObjectId(search_request.menu_id)})

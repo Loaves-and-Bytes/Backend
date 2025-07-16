@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 
 class FetchMenuBody(BaseModel):
@@ -20,7 +21,7 @@ class RegisterBody(BaseModel):
 class SearchBody(BaseModel):
     user_query: str
     menu_id: str
-    section_filter: list
-    tags_filter: list
-    price_min: float
-    price_max: float
+    section_filter: Optional[list] = []
+    tags_filter: Optional[list] = []
+    price_min: Optional[float] = None
+    price_max: Optional[float] = None

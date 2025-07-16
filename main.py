@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
+from sklearn.preprocessing import normalize
 
 load_dotenv()
 
@@ -63,21 +64,15 @@ def semantic_search(menu_id: str, query_text: str, threshold: float = -1, k: int
                     "embedding": np.array(dish["embedding"], dtype="float32")
                 })
 
-    dim = len(dish_records[0]["embedding"])
-    index = faiss.IndexFlatL2(dim)
-    embeddings = np.array([d["embedding"] for d in dish_records]) 
-    index.add(embeddings)
+    index = faiss.read_index(f"faiss_index_{menu_doc['name']}.index")
 
     model = SentenceTransformer("all-mpnet-base-v2") 
     query_vector = model.encode(query_text).astype("float32").reshape(1, -1)
-    distances, indices = index.search(query_vector, k)
-    similarities = 1 - distances[0] 
-
+    similarities, indices = index.search(normalize(query_vector, axis=1), k)
     results = []
-    for i, sim in zip(indices[0], similarities):
+    for i, sim in zip(indices[0], similarities[0]):
         if sim >= threshold:
             doc = dish_records[i]
-            print(sim, ' - ', doc['name'], doc['section'], doc['price'], doc['tags'], doc['description'])
             doc.pop('embedding', None)
             results.append(doc)
 
@@ -239,6 +234,19 @@ def UpdateMenu(body: UpdateMenuBody, request: Request):
     except Exception as e:
         return JSONResponse(status_code=400, content={"msg": "Error carrying out update request"})
     
+    menu_doc = menu_collection.find_one({"_id": ObjectId(res_id)})
+    embeddings = []
+    for section in menu_doc["menu"]["sections"]:
+        for dish in section["dishes"]:
+            if "embedding" in dish:
+                embeddings.append(np.array(dish["embedding"], dtype="float32"))
+
+    embeddings = normalize(np.array(embeddings), axis=1).astype("float32")
+    dim = len(embeddings[0])
+    index = faiss.IndexFlatIP(dim)
+    index.add(embeddings)
+    faiss.write_index(index, f"faiss_index_{menu_doc['name']}.index")
+
     return JSONResponse(status_code=200, content={"message":"menu update successful"})
 
 @app.get("/fetchDishes")
